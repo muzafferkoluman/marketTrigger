@@ -1,113 +1,101 @@
-import { onSchedule } from "firebase-functions/v2/scheduler";
-import * as logger from "firebase-functions/logger";
-import * as admin from "firebase-admin";
-import { Expo } from "expo-server-sdk";
+import * as functions from 'firebase-functions/v2';
+import * as admin from 'firebase-admin';
 
-// Required to initialize admin
-if (admin.apps.length === 0) {
+import { MockStockProvider } from './providers/StockProvider';
+import { evaluateCondition, TriggerConditionType } from './utils/evaluator';
+import { sendPushNotification } from './utils/notifications';
+
+// Ensure Firebase Admin is only initialized once
+if (!admin.apps.length) {
   admin.initializeApp();
 }
 
 const db = admin.firestore();
-const expo = new Expo();
 
-export const evaluateTriggers = onSchedule("every 15 minutes", async (event) => {
-  logger.info("Evaluating market triggers...");
+/**
+ * Scheduled Cloud Function: evaluateTriggers
+ * Triggered periodically (e.g., every 5 mins). You can adjust the schedule expression.
+ */
+export const evaluateTriggers = functions.scheduler.onSchedule('every 5 minutes', async (event) => {
+  console.log('[Scheduler] Starting global trigger evaluation...');
 
   try {
-    const triggersSnapshot = await db.collection("triggers").where("status", "==", "active").get();
-    
+    // 1. Fetch all active triggers
+    const triggersSnapshot = await db.collection('triggers')
+      .where('isActive', '==', true)
+      .get();
+
     if (triggersSnapshot.empty) {
-      logger.info("No active triggers to evaluate.");
+      console.log('[Scheduler] No active triggers found. Exiting.');
       return;
     }
 
-    const uniqueSymbols = [...new Set(triggersSnapshot.docs.map(d => d.data().symbol))];
+    const triggers = triggersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
     
-    // MOCK: Simulate fetching real market data.
-    // In production, fetch `uniqueSymbols` from a real API like Yahoo Finance
-    const currentPrices: Record<string, number> = {};
-    uniqueSymbols.forEach(symbol => {
-      // For MVP simulation without an API, we get one of the active records to base a dummy price on
-      // Let's pretend the price moved slightly. 
-      // Replace this entire block with a real axios API call for production.
-      const baseTrigger = triggersSnapshot.docs.find(d => d.data().symbol === symbol)?.data();
-      if (baseTrigger) {
-        // Randomly simulate a price between 90% and 110% of the target value to force some triggers to fire
-        currentPrices[symbol] = baseTrigger.targetValue * (0.9 + Math.random() * 0.2);
-      }
-    });
+    // 2. Extract unique symbols to batch requests
+    const uniqueSymbols = Array.from(new Set(triggers.map(t => t.symbol)));
+    console.log(`[Scheduler] Evaluating ${triggers.length} triggers for ${uniqueSymbols.length} unique symbols.`);
 
-    const messages: any[] = [];
-    const updatePromises: Promise<any>[] = [];
+    // 3. Fetch real-time market data
+    // NOTE: Replace `MockStockProvider` here with a real provider implementation when ready.
+    const provider = new MockStockProvider();
+    const marketData = await provider.getPrices(uniqueSymbols);
 
-    for (const doc of triggersSnapshot.docs) {
-      const trigger = doc.data();
-      const currentPrice = currentPrices[trigger.symbol];
-      if (!currentPrice) continue;
+    // 4. Evaluate each trigger
+    const batch = db.batch(); // Use Firestore batch writes for efficiency
+    let matchedCount = 0;
 
-      let conditionMet = false;
-
-      switch (trigger.conditionType) {
-        case "price_above":
-          conditionMet = currentPrice > trigger.targetValue;
-          break;
-        case "price_below":
-          conditionMet = currentPrice < trigger.targetValue;
-          break;
-        case "percent_change_up":
-          conditionMet = ((currentPrice - trigger.baselinePrice) / trigger.baselinePrice) * 100 > trigger.targetValue;
-          break;
-        case "percent_change_down":
-          conditionMet = ((trigger.baselinePrice - currentPrice) / trigger.baselinePrice) * 100 > trigger.targetValue;
-          break;
+    for (const trigger of triggers) {
+      const currentMarketPriceData = marketData.get(trigger.symbol);
+      
+      if (!currentMarketPriceData) {
+        console.warn(`[Scheduler] No market data returned for symbol: ${trigger.symbol}`);
+        continue;
       }
 
-      if (conditionMet) {
-        logger.info(`Trigger met for ${trigger.uid} on ${trigger.symbol}`);
-        
-        // Mark as triggered
-        updatePromises.push(doc.ref.update({
-          status: "triggered",
-          triggeredAt: admin.firestore.FieldValue.serverTimestamp()
-        }));
+      const isConditionMet = evaluateCondition(
+        trigger.conditionType as TriggerConditionType,
+        trigger.targetValue,
+        currentMarketPriceData.price,
+        trigger.baselinePrice
+      );
 
-        // Fetch user push token
-        const userDoc = await db.collection("users").doc(trigger.uid).get();
+      if (isConditionMet) {
+        console.log(`[Scheduler] TRIGGER MET! ID: ${trigger.id} | ${trigger.symbol} @ $${currentMarketPriceData.price}`);
+        matchedCount++;
+
+        // A. Mark trigger as fired
+        const triggerRef = db.collection('triggers').doc(trigger.id);
+        batch.update(triggerRef, {
+          isActive: false,
+          isTriggered: true,
+          triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          lastCheckedPrice: currentMarketPriceData.price
+        });
+
+        // B. Fetch user to send push notification
+        const userDoc = await db.collection('users').doc(trigger.userId).get();
         if (userDoc.exists) {
-          const pushToken = userDoc.data()?.pushToken;
-          if (pushToken && Expo.isExpoPushToken(pushToken)) {
-            messages.push({
-              to: pushToken,
-              sound: 'default',
-              title: `${trigger.symbol} Alert Triggered!`,
-              body: `Your condition for ${trigger.symbol} has been met. Current price is $${currentPrice.toFixed(2)}.`,
-              data: { triggerId: doc.id, symbol: trigger.symbol },
-            });
+          const userData = userDoc.data();
+          if (userData && userData.pushToken) {
+             const title = `MarketTrigger Alert: ${trigger.symbol}`;
+             const body = `${trigger.symbol} hit your target condition at $${currentMarketPriceData.price}!`;
+             await sendPushNotification(userData.pushToken, title, body, { triggerId: trigger.id });
           }
         }
       }
     }
 
-    // Execute database updates
-    if (updatePromises.length > 0) {
-      await Promise.all(updatePromises);
-      logger.info(`Updated ${updatePromises.length} triggers.`);
-    }
-
-    // Send push notifications via Expo
-    if (messages.length > 0) {
-      const chunks = expo.chunkPushNotifications(messages);
-      for (const chunk of chunks) {
-        try {
-          await expo.sendPushNotificationsAsync(chunk);
-        } catch (error) {
-          logger.error("Error sending push notifications", error);
-        }
-      }
+    // 5. Commit batch updates if any triggers were fired
+    if (matchedCount > 0) {
+      await batch.commit();
+      console.log(`[Scheduler] Database batch committed for ${matchedCount} triggered alerts.`);
+    } else {
+      console.log('[Scheduler] Evaluation finished. No conditions were met this cycle.');
     }
 
   } catch (error) {
-    logger.error("Error in evaluateTriggers function:", error);
+    console.error('[Scheduler] CRITICAL ERROR during evaluation run:', error);
   }
 });
