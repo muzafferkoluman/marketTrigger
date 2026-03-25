@@ -1,7 +1,7 @@
 import * as functions from 'firebase-functions/v2';
 import * as admin from 'firebase-admin';
 
-import { MockStockProvider } from './providers/StockProvider';
+import { MockStockProvider, FinnhubProvider } from './providers/StockProvider';
 import { evaluateCondition, TriggerConditionType } from './utils/evaluator';
 import { sendPushNotification } from './utils/notifications';
 
@@ -37,8 +37,10 @@ export const evaluateTriggers = functions.scheduler.onSchedule('every 5 minutes'
     console.log(`[Scheduler] Evaluating ${triggers.length} triggers for ${uniqueSymbols.length} unique symbols.`);
 
     // 3. Fetch real-time market data
-    // NOTE: Replace `MockStockProvider` here with a real provider implementation when ready.
-    const provider = new MockStockProvider();
+    // Use the concrete Finnhub provider using an environment variable
+    // Fallback to Mock if the API key isn't provided (useful for local dev)
+    const apiKey = process.env.FINNHUB_API_KEY;
+    const provider = apiKey ? new FinnhubProvider(apiKey) : new MockStockProvider();
     const marketData = await provider.getPrices(uniqueSymbols);
 
     // 4. Evaluate each trigger
