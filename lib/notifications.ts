@@ -1,10 +1,10 @@
-import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from './firebase';
+import { upsertUserProfile } from './users';
 
+// Determine how notifications should be handled when the app is in the foreground
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -13,46 +13,15 @@ Notifications.setNotificationHandler({
   }),
 });
 
-export async function registerForPushNotificationsAsync(uid: string) {
-  if (!Device.isDevice) {
-    console.log('Must use physical device for Push Notifications');
-    return;
-  }
-  
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
-  let finalStatus = existingStatus;
-  
-  if (existingStatus !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-  
-  if (finalStatus !== 'granted') {
-    console.log('Failed to get push token for push notification!');
-    return;
-  }
-  
-  try {
-    const projectId =
-      Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
-    
-    // For MVP, if not using EAS, this works out of the box with standard Expo Go config
-    const token = (
-      await Notifications.getExpoPushTokenAsync({
-        projectId: projectId,
-      })
-    ).data;
-    
-    console.log("Expo Push Token:", token);
-    
-    // Save to Firestore
-    const userRef = doc(db, 'users', uid);
-    await setDoc(userRef, { pushToken: token }, { merge: true });
-    
-  } catch (e: any) {
-    console.log("Error getting push token:", e);
-  }
+/**
+ * Handles Expo push token registration and permission checks.
+ */
+function handleRegistrationError(errorMessage: string) {
+  alert(errorMessage);
+  throw new Error(errorMessage);
+}
 
+export async function registerForPushNotificationsAsync() {
   if (Platform.OS === 'android') {
     Notifications.setNotificationChannelAsync('default', {
       name: 'default',
@@ -61,4 +30,57 @@ export async function registerForPushNotificationsAsync(uid: string) {
       lightColor: '#FF231F7C',
     });
   }
+
+  if (Device.isDevice) {
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    
+    if (finalStatus !== 'granted') {
+      handleRegistrationError('Permission not granted to get push token for push notification!');
+      return;
+    }
+    
+    const projectId =
+      Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
+      
+    if (!projectId) {
+      // Allow fallback for raw local dev without EAS
+      console.warn("No EAS project ID found. Token might not work on production.");
+    }
+
+    try {
+      const pushTokenString = (
+        await Notifications.getExpoPushTokenAsync({
+          projectId,
+        })
+      ).data;
+
+      return pushTokenString;
+    } catch (e: unknown) {
+      handleRegistrationError(`${e}`);
+    }
+  } else {
+    handleRegistrationError('Must use physical device for push notifications');
+  }
 }
+
+/**
+ * Reusable helper to request token and save it securely to the user's Firestore profile.
+ */
+export const syncPushTokenToProfile = async (userId: string) => {
+  try {
+    const token = await registerForPushNotificationsAsync();
+    if (token) {
+      // Update the user's document in Firestore with the fresh token
+      await upsertUserProfile(userId, { pushToken: token });
+      console.log('Push token successfully synced to profile.');
+    }
+  } catch (error) {
+    console.error('Error syncing push token:', error);
+  }
+};
