@@ -1,39 +1,63 @@
-import Purchases from 'react-native-purchases';
+import Purchases, { CustomerInfo, LOG_LEVEL } from 'react-native-purchases';
 import { Platform } from 'react-native';
-import { useAuthStore } from '../store/useAuthStore';
+import { SubscriptionPlan } from '../types';
 
-// MOCK CONSTANTS
-const REVENUECAT_API_KEY_IOS = "appl_api_key_here";
-const REVENUECAT_API_KEY_ANDROID = "goog_api_key_here";
-const ENTITLEMENT_ID = "premium";
+export const REVENUECAT_API_KEYS = {
+  apple: process.env.EXPO_PUBLIC_RC_APPLE_API_KEY || 'appl_your_placeholder_key_here',
+  google: process.env.EXPO_PUBLIC_RC_GOOGLE_API_KEY || 'goog_your_placeholder_key_here',
+  entitlementId: 'premium_trigger_access', // The ID from RevenueCat dashboard
+};
 
-export const initializeRevenueCat = async (uid: string) => {
+/**
+ * Validates and configures the SDK on app launch.
+ */
+export const configureRevenueCat = async (appUserId?: string) => {
+  Purchases.setLogLevel(LOG_LEVEL.DEBUG);
+
   if (Platform.OS === 'ios') {
-    // Purchases.configure({ apiKey: REVENUECAT_API_KEY_IOS, appUserID: uid });
+    Purchases.configure({ apiKey: REVENUECAT_API_KEYS.apple, appUserID: appUserId });
   } else if (Platform.OS === 'android') {
-    // Purchases.configure({ apiKey: REVENUECAT_API_KEY_ANDROID, appUserID: uid });
+    Purchases.configure({ apiKey: REVENUECAT_API_KEYS.google, appUserID: appUserId });
   }
 };
 
-export const checkPremiumStatus = async (): Promise<boolean> => {
+/**
+ * Plan resolver: Determines if the user is free or premium based on entitlement.
+ */
+export const resolvePlanFromCustomerInfo = (customerInfo: CustomerInfo): SubscriptionPlan => {
+  if (typeof customerInfo.entitlements.active[REVENUECAT_API_KEYS.entitlementId] !== 'undefined') {
+    return 'premium';
+  }
+  return 'free';
+};
+
+/**
+ * Sync logic wrapper: call this when app becomes active or after purchase.
+ */
+export const getSubscriptionStatus = async (): Promise<SubscriptionPlan> => {
   try {
-    // MOCK: Always return false to trigger paywall for testing limits
-    // In production:
-    // const customerInfo = await Purchases.getCustomerInfo();
-    // return typeof customerInfo.entitlements.active[ENTITLEMENT_ID] !== "undefined";
-    return false;
-  } catch (e) {
-    return false;
+    const customerInfo = await Purchases.getCustomerInfo();
+    return resolvePlanFromCustomerInfo(customerInfo);
+  } catch (error) {
+    console.warn("Failed to fetch plan from RevenueCat, defaulting to 'free'", error);
+    return 'free';
   }
 };
 
-export const purchasePremium = async () => {
+/**
+ * Triggers the native purchase sheet for the first available package
+ */
+export const purchasePremium = async (): Promise<boolean> => {
   try {
-    // MOCK:
-    // const { customerInfo } = await Purchases.purchasePackage(packageToBuy);
-    // return typeof customerInfo.entitlements.active[ENTITLEMENT_ID] !== "undefined";
-    return true; // pretend successful purchase
+    const offerings = await Purchases.getOfferings();
+    if (offerings.current !== null && offerings.current.availablePackages.length !== 0) {
+      const { customerInfo } = await Purchases.purchasePackage(offerings.current.availablePackages[0]);
+      return resolvePlanFromCustomerInfo(customerInfo) === 'premium';
+    }
   } catch (e: any) {
-    throw new Error(e.message || "Failed to purchase premium");
+    if (!e.userCancelled) {
+      console.error('Purchase error:', e);
+    }
   }
+  return false;
 };
