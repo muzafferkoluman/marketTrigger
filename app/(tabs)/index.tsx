@@ -1,100 +1,83 @@
-import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Link } from 'expo-router';
+import React from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { useRouter } from 'expo-router';
+import { StockSymbol } from '../../types';
 
-import { usePopularStocks } from '../../hooks/useMarketData';
-import { Stock } from '../../lib/api';
-import { useAuthStore } from '../../store/useAuthStore';
+// Hardcoded mock data as requested
+const MOCK_STOCKS: (StockSymbol & { currentPrice: string })[] = [
+  { symbol: 'AAPL', companyName: 'Apple Inc.', exchange: 'NASDAQ', currentPrice: '173.50' },
+  { symbol: 'TSLA', companyName: 'Tesla, Inc.', exchange: 'NASDAQ', currentPrice: '175.22' },
+  { symbol: 'NVDA', companyName: 'NVIDIA Corp', exchange: 'NASDAQ', currentPrice: '880.08' },
+  { symbol: 'MSFT', companyName: 'Microsoft Corp', exchange: 'NASDAQ', currentPrice: '425.22' },
+  { symbol: 'AMZN', companyName: 'Amazon.com, Inc.', exchange: 'NASDAQ', currentPrice: '180.38' },
+  { symbol: 'META', companyName: 'Meta Platforms, Inc.', exchange: 'NASDAQ', currentPrice: '510.92' },
+  { symbol: 'GOOGL', companyName: 'Alphabet Inc.', exchange: 'NASDAQ', currentPrice: '155.49' }
+];
 
 export default function HomeScreen() {
-  const { data: popularStocks, isLoading, isError } = usePopularStocks();
-  const { user } = useAuthStore();
+  const router = useRouter();
 
-  const renderStockItem = ({ item }: { item: Stock }) => {
-    const isPositive = item.change >= 0;
-    return (
-      <Link href={{ pathname: '/create', params: { symbol: item.symbol } }} asChild>
-        <TouchableOpacity style={styles.stockItem}>
-          <View>
-            <Text style={styles.symbol}>{item.symbol}</Text>
-            <Text style={styles.name}>{item.name}</Text>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={styles.price}>${item.price.toFixed(2)}</Text>
-            <Text style={[styles.change, { color: isPositive ? '#2ecc71' : '#e74c3c' }]}>
-              {isPositive ? '+' : ''}{item.change.toFixed(2)} ({item.changePercent.toFixed(2)}%)
-            </Text>
-          </View>
-        </TouchableOpacity>
-      </Link>
-    );
+  const handleStockPress = (stock: StockSymbol) => {
+    router.push({
+      pathname: '/create',
+      params: {
+        symbol: stock.symbol,
+        companyName: stock.companyName,
+        exchange: stock.exchange,
+      }
+    });
   };
+
+  const renderStockItem = ({ item }: { item: typeof MOCK_STOCKS[0] }) => (
+    <TouchableOpacity 
+      style={styles.card} 
+      onPress={() => handleStockPress(item)}
+      activeOpacity={0.7}
+    >
+      <View style={styles.cardHeader}>
+        <Text style={styles.symbol}>{item.symbol}</Text>
+        <Text style={styles.price}>${item.currentPrice}</Text>
+      </View>
+      <View style={styles.cardFooter}>
+        <Text style={styles.companyName} numberOfLines={1}>{item.companyName}</Text>
+        <Text style={styles.exchange}>{item.exchange}</Text>
+      </View>
+    </TouchableOpacity>
+  );
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>MarketTrigger</Text>
-        <Link href="/search" asChild>
-          <TouchableOpacity style={styles.searchButton}>
-            <Text style={styles.searchButtonText}>Search Stocks</Text>
-          </TouchableOpacity>
-        </Link>
-      </View>
-
-      <Text style={styles.sectionTitle}>Popular Stocks</Text>
-      
-      {isLoading ? (
-        <ActivityIndicator size="large" color="#3498db" style={{ marginTop: 20 }} />
-      ) : isError ? (
-        <Text style={styles.errorText}>Failed to load stocks.</Text>
-      ) : (
-        <FlatList
-          data={popularStocks}
-          keyExtractor={(item) => item.symbol}
-          renderItem={renderStockItem}
-          contentContainerStyle={styles.listContent}
-        />
-      )}
+      <Text style={styles.headerTitle}>Popular Stocks</Text>
+      <FlatList
+        data={MOCK_STOCKS}
+        keyExtractor={(item) => item.symbol}
+        renderItem={renderStockItem}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f6fa' },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    padding: 20, 
-    paddingTop: 60,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#ecf0f1'
-  },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#2c3e50' },
-  searchButton: { 
-    backgroundColor: '#3498db', 
-    paddingHorizontal: 15, 
-    paddingVertical: 8, 
-    borderRadius: 20 
-  },
-  searchButtonText: { color: '#ffffff', fontWeight: '600' },
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', margin: 20, color: '#34495e' },
-  listContent: { paddingHorizontal: 20 },
-  stockItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: '#ffffff',
-    padding: 15,
+  container: { flex: 1, backgroundColor: '#f9f9f9', paddingHorizontal: 16 },
+  headerTitle: { fontSize: 28, fontWeight: 'bold', color: '#2c3e50', marginVertical: 20, marginTop: 40 },
+  listContent: { paddingBottom: 30 },
+  card: {
+    backgroundColor: '#fff',
     borderRadius: 12,
-    marginBottom: 10,
+    padding: 18,
+    marginBottom: 12,
     shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 5,
-    elevation: 2,
+    elevation: 3,
   },
-  symbol: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50' },
-  name: { fontSize: 12, color: '#7f8c8d', marginTop: 4 },
-  price: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50' },
-  change: { fontSize: 12, marginTop: 4, fontWeight: '600' },
-  errorText: { color: '#e74c3c', textAlign: 'center', marginTop: 20 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  symbol: { fontSize: 18, fontWeight: 'bold', color: '#34495e' },
+  price: { fontSize: 18, fontWeight: '600', color: '#2ecc71' },
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  companyName: { fontSize: 14, color: '#7f8c8d', flex: 1, paddingRight: 10 },
+  exchange: { fontSize: 12, color: '#bdc3c7', fontWeight: '500' }
 });

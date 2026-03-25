@@ -1,163 +1,186 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Alert, ScrollView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { createTrigger } from '../lib/triggers';
+import { createTrigger, getUserTriggers } from '../lib/triggers';
 import { useAuthStore } from '../store/useAuthStore';
-import { fetchStockPrice } from '../lib/api';
-
-type ConditionType = 'price_above' | 'price_below' | 'percent_change_up' | 'percent_change_down';
+import { TriggerFormData, TriggerConditionType } from '../types';
+import { APP_CONFIG, CONDITION_LABELS } from '../constants';
+import { validateTriggerForm } from '../utils/validation';
 
 export default function CreateTriggerScreen() {
-  const { symbol } = useLocalSearchParams();
+  const { symbol, companyName, exchange } = useLocalSearchParams<{ symbol: string; companyName: string; exchange: string }>();
   const router = useRouter();
-  const { user } = useAuthStore();
   const queryClient = useQueryClient();
+  const { user } = useAuthStore();
 
-  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
-  const [condition, setCondition] = useState<ConditionType>('price_above');
-  const [targetValue, setTargetValue] = useState('');
+  const [form, setForm] = useState<TriggerFormData>({
+    symbol: symbol || '',
+    companyName: companyName || '',
+    exchange: exchange || '',
+    conditionType: 'price_above',
+    targetValue: '',
+  });
 
-  useEffect(() => {
-    if (symbol) {
-      fetchStockPrice(symbol as string).then(setCurrentPrice);
-    }
-  }, [symbol]);
+  const [errors, setErrors] = useState<Partial<Record<keyof TriggerFormData, string>>>({});
 
   const createMutation = useMutation({
-    mutationFn: async () => {
-      if (!user) throw new Error("Must be logged in");
-      if (!symbol || !currentPrice || !targetValue) throw new Error("Missing fields");
-      
-      const parsedValue = parseFloat(targetValue);
-      if (isNaN(parsedValue)) throw new Error("Invalid target value");
-
-      await createTrigger({
-        uid: user.uid,
-        symbol: (symbol as string).toUpperCase(),
-        conditionType: condition,
-        targetValue: parsedValue,
-        baselinePrice: currentPrice,
-        status: 'active'
-      });
+    mutationFn: async (data: TriggerFormData) => {
+      if (!user) throw new Error('You must be logged in to create a trigger');
+      return createTrigger(user.uid, data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['triggers', user?.uid] });
-      Alert.alert("Success", "Trigger created successfully", [
-        { text: "OK", onPress: () => router.back() }
-      ]);
+      router.back();
     },
-    onError: (error: any) => {
-      Alert.alert("Error", error.message || "Failed to create trigger");
+    onError: (error: Error) => {
+      Alert.alert('Error', error.message || 'Failed to create trigger');
     }
   });
 
-  const handleSave = () => {
-    // Validate trigger limit
-    const activeTriggersCount = queryClient.getQueryData<any[]>(['triggers', user?.uid])?.filter(t => t.status === 'active')?.length || 0;
-    
-    // Check if limits exceeded (for mock we just assume they are not premium yet as checked by the paywall later)
-    if (activeTriggersCount >= 3) {
+  const handleSave = async () => {
+    // 1. Validate Form
+    const validation = validateTriggerForm(form);
+    if (!validation.isValid) {
+      setErrors(validation.errors);
+      return;
+    }
+    setErrors({});
+
+    // 2. Validate Limit Enforcements
+    // We fetch the cached triggers or fetch fresh if none cached.
+    const cachedTriggers = queryClient.getQueryData<any[]>(['triggers', user?.uid]);
+    let activeCount = 0;
+
+    if (cachedTriggers) {
+      activeCount = cachedTriggers.filter(t => t.isActive).length;
+    } else if (user) {
+      const dbTriggers = await getUserTriggers(user.uid);
+      activeCount = dbTriggers.filter(t => t.isActive).length;
+    }
+
+    if (activeCount >= APP_CONFIG.FREE_TRIGGER_LIMIT) {
       Alert.alert(
-        "Limit Reached",
-        "Free users can only have 3 active triggers. Please upgrade to Premium.",
+        "Trigger Limit Reached",
+        `Free users can only have ${APP_CONFIG.FREE_TRIGGER_LIMIT} active triggers. Please upgrade to Premium to create more.`,
         [
           { text: "Cancel", style: "cancel" },
-          { text: "Upgrade", onPress: () => router.push('/paywall') }
+          { text: "Upgrade Options", onPress: () => router.push('/paywall') }
         ]
       );
       return;
     }
 
-    createMutation.mutate();
+    // 3. Submit
+    createMutation.mutate(form);
   };
 
-  if (!symbol) return <Text style={{padding: 20}}>No symbol provided.</Text>;
-
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
       <View style={styles.header}>
-        <Text style={styles.symbolText}>{symbol}</Text>
-        <Text style={styles.priceText}>
-          Current Price: {currentPrice ? `$${currentPrice.toFixed(2)}` : 'Loading...'}
-        </Text>
+        <Text style={styles.title}>Create Alert</Text>
+        <Text style={styles.subtitle}>{form.symbol ? form.symbol.toUpperCase() : 'Any Stock'}</Text>
       </View>
 
-      <Text style={styles.label}>Select Condition</Text>
-      <View style={styles.conditionGrid}>
-        {[
-          { id: 'price_above', label: 'Price goes above' },
-          { id: 'price_below', label: 'Price drops below' },
-          { id: 'percent_change_up', label: '% Gain over' },
-          { id: 'percent_change_down', label: '% Drop over' },
-        ].map((c) => (
-          <TouchableOpacity 
-            key={c.id} 
-            style={[styles.conditionBtn, condition === c.id && styles.conditionBtnActive]}
-            onPress={() => setCondition(c.id as ConditionType)}
-          >
-            <Text style={[styles.conditionText, condition === c.id && styles.conditionTextActive]}>
-              {c.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.formGroup}>
+        <Text style={styles.label}>Stock Symbol</Text>
+        <TextInput
+          style={[styles.input, errors.symbol && styles.inputError]}
+          placeholder="e.g. AAPL"
+          value={form.symbol}
+          onChangeText={(text) => setForm(prev => ({ ...prev, symbol: text }))}
+          autoCapitalize="characters"
+        />
+        {errors.symbol && <Text style={styles.errorText}>{errors.symbol}</Text>}
       </View>
 
-      <Text style={styles.label}>Target Value</Text>
-      <TextInput
-        style={styles.input}
-        keyboardType="numeric"
-        placeholder={condition.includes('percent') ? "e.g., 5 for 5%" : "e.g., 150.00"}
-        value={targetValue}
-        onChangeText={setTargetValue}
-      />
+      <View style={styles.formGroup}>
+        <Text style={styles.label}>Condition</Text>
+        <View style={styles.conditionOptions}>
+          {(Object.keys(CONDITION_LABELS) as TriggerConditionType[]).map((type) => (
+            <TouchableOpacity
+              key={type}
+              style={[styles.conditionBtn, form.conditionType === type && styles.conditionBtnActive]}
+              onPress={() => setForm(prev => ({ ...prev, conditionType: type }))}
+            >
+              <Text style={[styles.conditionBtnText, form.conditionType === type && styles.conditionBtnTextActive]}>
+                {CONDITION_LABELS[type]}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        {errors.conditionType && <Text style={styles.errorText}>{errors.conditionType}</Text>}
+      </View>
+
+      <View style={styles.formGroup}>
+        <Text style={styles.label}>Target Value</Text>
+        <TextInput
+          style={[styles.input, errors.targetValue && styles.inputError]}
+          placeholder="e.g. 150.50"
+          value={form.targetValue}
+          onChangeText={(text) => setForm(prev => ({ ...prev, targetValue: text }))}
+          keyboardType="numeric"
+        />
+        {errors.targetValue && <Text style={styles.errorText}>{errors.targetValue}</Text>}
+      </View>
 
       <TouchableOpacity 
-        style={[styles.saveBtn, createMutation.isPending && styles.saveBtnLoading]} 
+        style={[styles.submitBtn, createMutation.isPending && styles.submitBtnDisabled]} 
         onPress={handleSave}
         disabled={createMutation.isPending}
       >
         {createMutation.isPending ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.saveBtnText}>Create Alert</Text>
+          <Text style={styles.submitBtnText}>Save Trigger</Text>
         )}
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f6fa', padding: 20 },
-  header: { alignItems: 'center', marginBottom: 30, marginTop: 20 },
-  symbolText: { fontSize: 32, fontWeight: 'bold', color: '#2c3e50' },
-  priceText: { fontSize: 18, color: '#7f8c8d', marginTop: 10 },
-  label: { fontSize: 16, fontWeight: 'bold', color: '#34495e', marginBottom: 15 },
-  conditionGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 20 },
-  conditionBtn: {
-    width: '48%',
-    backgroundColor: '#ffffff',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#bdc3c7',
-    alignItems: 'center'
-  },
-  conditionBtnActive: { backgroundColor: '#3498db', borderColor: '#3498db' },
-  conditionText: { color: '#2c3e50', fontWeight: '500' },
-  conditionTextActive: { color: '#ffffff', fontWeight: 'bold' },
+  container: { flex: 1, backgroundColor: '#f9f9f9', padding: 20 },
+  header: { marginBottom: 30, marginTop: 20 },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#2c3e50' },
+  subtitle: { fontSize: 16, color: '#7f8c8d', marginTop: 5 },
+  formGroup: { marginBottom: 25 },
+  label: { fontSize: 14, fontWeight: '600', color: '#34495e', marginBottom: 8 },
   input: {
-    backgroundColor: '#ffffff',
-    padding: 15,
-    borderRadius: 10,
-    fontSize: 18,
+    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#bdc3c7',
-    marginBottom: 40,
+    borderColor: '#e0e0e0',
+    borderRadius: 10,
+    padding: 15,
+    fontSize: 16,
+    color: '#2c3e50'
   },
-  saveBtn: { backgroundColor: '#2ecc71', padding: 18, borderRadius: 10, alignItems: 'center' },
-  saveBtnLoading: { opacity: 0.7 },
-  saveBtnText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' }
+  inputError: { borderColor: '#e74c3c' },
+  errorText: { color: '#e74c3c', fontSize: 12, marginTop: 5 },
+  conditionOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  conditionBtn: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+  },
+  conditionBtnActive: {
+    backgroundColor: '#3498db',
+    borderColor: '#3498db',
+  },
+  conditionBtnText: { color: '#34495e', fontSize: 14, fontWeight: '500' },
+  conditionBtnTextActive: { color: '#fff' },
+  submitBtn: {
+    backgroundColor: '#2ecc71',
+    padding: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 40
+  },
+  submitBtnDisabled: { opacity: 0.7 },
+  submitBtnText: { color: '#fff', fontSize: 18, fontWeight: 'bold' }
 });
