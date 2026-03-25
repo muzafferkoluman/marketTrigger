@@ -1,98 +1,100 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Link } from 'expo-router';
 
-export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+import { usePopularStocks } from '../../hooks/useMarketData';
+import { Stock } from '../../lib/api';
+import { useAuthStore } from '../../store/useAuthStore';
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+export default function HomeScreen() {
+  const { data: popularStocks, isLoading, isError } = usePopularStocks();
+  const { user } = useAuthStore();
+
+  const renderStockItem = ({ item }: { item: Stock }) => {
+    const isPositive = item.change >= 0;
+    return (
+      <Link href={{ pathname: '/create', params: { symbol: item.symbol } }} asChild>
+        <TouchableOpacity style={styles.stockItem}>
+          <View>
+            <Text style={styles.symbol}>{item.symbol}</Text>
+            <Text style={styles.name}>{item.name}</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.price}>${item.price.toFixed(2)}</Text>
+            <Text style={[styles.change, { color: isPositive ? '#2ecc71' : '#e74c3c' }]}>
+              {isPositive ? '+' : ''}{item.change.toFixed(2)} ({item.changePercent.toFixed(2)}%)
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </Link>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>MarketTrigger</Text>
+        <Link href="/search" asChild>
+          <TouchableOpacity style={styles.searchButton}>
+            <Text style={styles.searchButtonText}>Search Stocks</Text>
+          </TouchableOpacity>
+        </Link>
+      </View>
+
+      <Text style={styles.sectionTitle}>Popular Stocks</Text>
+      
+      {isLoading ? (
+        <ActivityIndicator size="large" color="#3498db" style={{ marginTop: 20 }} />
+      ) : isError ? (
+        <Text style={styles.errorText}>Failed to load stocks.</Text>
+      ) : (
+        <FlatList
+          data={popularStocks}
+          keyExtractor={(item) => item.symbol}
+          renderItem={renderStockItem}
+          contentContainerStyle={styles.listContent}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: { flex: 1, backgroundColor: '#f5f6fa' },
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    padding: 20, 
+    paddingTop: 60,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#ecf0f1'
+  },
+  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#2c3e50' },
+  searchButton: { 
+    backgroundColor: '#3498db', 
+    paddingHorizontal: 15, 
+    paddingVertical: 8, 
+    borderRadius: 20 
+  },
+  searchButtonText: { color: '#ffffff', fontWeight: '600' },
+  sectionTitle: { fontSize: 18, fontWeight: 'bold', margin: 20, color: '#34495e' },
+  listContent: { paddingHorizontal: 20 },
+  stockItem: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+    padding: 15,
+    borderRadius: 12,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
+  symbol: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50' },
+  name: { fontSize: 12, color: '#7f8c8d', marginTop: 4 },
+  price: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50' },
+  change: { fontSize: 12, marginTop: 4, fontWeight: '600' },
+  errorText: { color: '#e74c3c', textAlign: 'center', marginTop: 20 },
 });
