@@ -9,7 +9,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useColorScheme } from '../hooks/use-color-scheme';
 import { auth } from '../lib/firebase';
 import { useAuthStore } from '../store/useAuthStore';
-import { registerForPushNotificationsAsync } from '../lib/notifications';
+import { syncPushTokenToProfile } from '../lib/notifications';
+import { configureRevenueCat } from '../lib/revenuecat';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -25,7 +26,8 @@ export default function RootLayout() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       if (user) {
-        registerForPushNotificationsAsync(user.uid);
+        configureRevenueCat(user.uid);
+        syncPushTokenToProfile(user.uid);
       } else {
         signInAnon(); // Auto sign-in anonymously for MVP
       }

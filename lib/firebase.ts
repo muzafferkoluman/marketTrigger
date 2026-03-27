@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, initializeAuth, getReactNativePersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
 
 // TODO: Replace with your actual Firebase project config values from the Firebase Console
 // Create a .env file and add these variables (do not commit .env to version control)
@@ -16,5 +17,8 @@ const firebaseConfig = {
 // Initialize Firebase using the singleton pattern to support Fast Refresh in Expo
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-export const auth = getAuth(app);
+export const auth = initializeAuth(app, {
+  // @ts-ignore: getReactNativePersistence exists in JS but might be missing in older TS definitions
+  persistence: getReactNativePersistence(ReactNativeAsyncStorage)
+});
 export const db = getFirestore(app);

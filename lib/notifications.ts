@@ -10,6 +10,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
@@ -50,7 +52,8 @@ export async function registerForPushNotificationsAsync() {
       
     if (!projectId) {
       // Allow fallback for raw local dev without EAS
-      console.warn("No EAS project ID found. Token might not work on production.");
+      console.warn("[Notifications] No EAS project ID found. Token won't generate on Expo Go.");
+      return null;
     }
 
     try {
